@@ -93,6 +93,10 @@ struct thread
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 
+    int64_t wake;                       /* Time at which this thread will be woken up if timer_sleep () has been called. */
+    struct list_elem sleepelem;         /* List element for sleeping threads list. */
+    struct semaphore *sleepsema;         /* Used to block when timer_sleep () is called */
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */

@@ -30,13 +30,24 @@ FirstName LastName <email@domain.example>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+thread.h - struct thread - int64_t wake; A thread will unblock when wake ticks have elapsed.
+timer.c - static struct list sleep_list; A list of threads that have called timer_sleep ()
+
+
+struct thread: added 
+
 ---- ALGORITHMS ----
 
 >> A2: Briefly describe what happens in a call to timer_sleep(),
 >> including the effects of the timer interrupt handler.
 
+currently, timer sleep busy waits: calling thread_yield () until in a loop until enough time has elapsed to break the loop. A possible solution for the timer without busy waiting is as follows: the starting tick is int64_t start = timer_ticks ();
+when we record this, we block this thread, then record the amount of time it should be blocked by adding a field in struct thread called timerending that represents the tick number in which we should unblock this thread we can check when to unblock a thread by looping through a list of sleeping threads (create a static list of sleeping threads in thread.c) each time we enter schedule -do not do it in schedule, we should do it in thread_tick() or timer_interrupt, we iterate through this list and unblock any thread that has slept for long enough, we should use semaphores for this.
+
 >> A3: What steps are taken to minimize the amount of time spent in
 >> the timer interrupt handler?
+
+We can maintain the list of sleeping threads in ascending order, sorted by the the time that the thread should wake up, so during the timer interrupt handler, the iteration through the sleeping list can terminate as soon as we reach a thread that is not ready to wake, instead of possibly iterating through the entire sleeping list.
 
 ---- SYNCHRONIZATION ----
 
@@ -45,6 +56,10 @@ FirstName LastName <email@domain.example>
 
 >> A5: How are race conditions avoided when a timer interrupt occurs
 >> during a call to timer_sleep()?
+
+# this is where my error is happening, timer sleep adds the thread to the sleeping list, but has not set up the semaphore when timer_interrupt is called, so timer interrupt goes through the sleeping list and tries to up a semaphore that has not been initialized yet
+
+this could be avoided by only 
 
 ---- RATIONALE ----
 

@@ -7,9 +7,9 @@
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
+#include "threads/malloc.h"
   
 /* See [8254] for hardware details of the 8254 timer chip. */
-
 #if TIMER_FREQ < 19
 #error 8254 timer requires TIMER_FREQ >= 19
 #endif
@@ -24,11 +24,24 @@ static int64_t ticks;
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
 
+/* (Sorted? not implemented yet) list of sleeping threads, threads that have called timer_sleep ()*/
+static struct list sleep_list;
+
 static intr_handler_func timer_interrupt;
 static bool too_many_loops (unsigned loops);
 static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
 static void real_time_delay (int64_t num, int32_t denom);
+static bool sleep_compare (const struct list_elem *a,
+                           const struct list_elem*b, void *aux);
+
+/* Return true if sleeping thread a has a sooner wake up time than b*/
+bool 
+sleep_compare (const struct list_elem *a, const struct list_elem *b, void *aux)
+{
+  return list_entry(a, struct thread, sleepelem)->wake < 
+         list_entry(b, struct thread, sleepelem)->wake;
+}
 
 /* Sets up the timer to interrupt TIMER_FREQ times per second,
    and registers the corresponding interrupt. */
@@ -37,6 +50,7 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  list_init (&sleep_list);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -89,11 +103,21 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
-  int64_t start = timer_ticks ();
-
+  struct thread *t;
+  t = thread_current ();
+  int64_t wake = timer_ticks ();
+  wake = wake + ticks;
+  t->wake = wake;
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  struct semaphore *sema_sleep;
+  int s = sizeof *sema_sleep;
+  int ss = sizeof (struct semaphore);
+  sema_sleep = malloc (sizeof *sema_sleep);
+  t->sleepsema = sema_sleep;
+  sema_init (sema_sleep, 0);
+  list_insert_ordered (&sleep_list, &t->sleepelem, sleep_compare, NULL);
+  sema_down (sema_sleep);
+  free(sema_sleep);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -171,6 +195,18 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
+  while (!list_empty (&sleep_list))
+  {
+    struct list_elem *front = list_front (&sleep_list);
+    struct thread *sleeper = list_entry (front, struct thread, sleepelem);
+    if (sleeper->wake <= ticks)
+    {
+      list_remove (front);
+      sema_up (sleeper->sleepsema);
+    }
+    else
+      break;
+  }
   thread_tick ();
 }
 
