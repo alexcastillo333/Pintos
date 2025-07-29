@@ -24,8 +24,14 @@ static int64_t ticks;
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
 
-/* (Sorted? not implemented yet) list of sleeping threads, threads that have called timer_sleep ()*/
+/* Sorted list of sleeping threads, threads that have called timer_sleep ()*/
 static struct list sleep_list;
+
+/* A lock for ensuring the sleep_list is not accessed by multiple threads at once in timer_sleep () */
+static struct lock sleep_lock;
+
+/* A semaphore for ensuring that timer_interrupt does not access and modify sleep_list when a thread in timer_sleep () is modifying sleep_list */
+static struct semaphore ti_sema;
 
 static intr_handler_func timer_interrupt;
 static bool too_many_loops (unsigned loops);
@@ -51,6 +57,8 @@ timer_init (void)
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
   list_init (&sleep_list);
+  lock_init (&sleep_lock);
+  sema_init (&ti_sema, 1);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -103,21 +111,19 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
-  struct thread *t;
-  t = thread_current ();
-  int64_t wake = timer_ticks ();
-  wake = wake + ticks;
-  t->wake = wake;
   ASSERT (intr_get_level () == INTR_ON);
-  struct semaphore *sema_sleep;
-  int s = sizeof *sema_sleep;
-  int ss = sizeof (struct semaphore);
-  sema_sleep = malloc (sizeof *sema_sleep);
-  t->sleepsema = sema_sleep;
-  sema_init (sema_sleep, 0);
+  struct thread *t = thread_current ();
+  int64_t wake = timer_ticks () + ticks;
+  t->wake = wake;
+  t->sleepsema = malloc (sizeof (struct semaphore));
+  sema_init (t->sleepsema, 0);
+  sema_down (&ti_sema);
+  lock_acquire (&sleep_lock);
   list_insert_ordered (&sleep_list, &t->sleepelem, sleep_compare, NULL);
-  sema_down (sema_sleep);
-  free(sema_sleep);
+  lock_release (&sleep_lock);
+  sema_up (&ti_sema);
+  sema_down (t->sleepsema);
+  free(t->sleepsema);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -195,20 +201,25 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
-  while (!list_empty (&sleep_list))
-  {
-    struct list_elem *front = list_front (&sleep_list);
-    struct thread *sleeper = list_entry (front, struct thread, sleepelem);
-    if (sleeper->wake <= ticks)
-    {
-      list_remove (front);
-      sema_up (sleeper->sleepsema);
-    }
-    else
-      break;
-  }
   thread_tick ();
+  if (sema_try_down (&ti_sema))
+  {
+    while (!list_empty (&sleep_list))
+    {
+      struct list_elem *front = list_front (&sleep_list);
+      struct thread *sleeper = list_entry (front, struct thread, sleepelem);
+      if (sleeper->wake <= ticks)
+      {
+        list_remove (front);
+        sema_up (sleeper->sleepsema);
+      }
+      else
+        break;
+    }
+    sema_up (&ti_sema);
+  }
 }
+
 
 /* Returns true if LOOPS iterations waits for more than one timer
    tick, otherwise false. */

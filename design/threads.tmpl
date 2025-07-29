@@ -31,7 +31,13 @@ FirstName LastName <email@domain.example>
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
 thread.h - struct thread - int64_t wake; A thread will unblock when wake ticks have elapsed.
-timer.c - static struct list sleep_list; A list of threads that have called timer_sleep ()
+thread.h - struct thread - struct list_elem sleepelem; A list element for memmbership in the list of sleeping threads.
+thead.h - struct thread - struct semaphore sleepsema; A semaphore used to block a thread that called timer_sleep ().
+timer.c - static struct list sleep_list; A list of threads that have called timer_sleep ().
+timer.c - static struct lock sleep_lock; A lock that ensures only one thread is modifying sleep_list at a time
+timer.c - static struct semaphore ti_sema; A semaphore that ensures timer interrupt only accesses and/or modifies sleep_list when no other thread is modifying sleep_list.
+
+
 
 
 struct thread: added 
@@ -47,19 +53,20 @@ when we record this, we block this thread, then record the amount of time it sho
 >> A3: What steps are taken to minimize the amount of time spent in
 >> the timer interrupt handler?
 
-We can maintain the list of sleeping threads in ascending order, sorted by the the time that the thread should wake up, so during the timer interrupt handler, the iteration through the sleeping list can terminate as soon as we reach a thread that is not ready to wake, instead of possibly iterating through the entire sleeping list.
+We can maintain the list of sleeping threads in ascending order, sorted by the the time that the thread should wake up, so during the timer interrupt handler, the iteration through the sleeping list can terminate as soon as we reach a thread that is not ready to wake, instead of possibly iterating through the entire sleeping list. This also allows removing the sleeping thread from the sleeplist to be quicker because we are popping the first element of a linked list, which can be done in constant time.
 
 ---- SYNCHRONIZATION ----
 
 >> A4: How are race conditions avoided when multiple threads call
 >> timer_sleep() simultaneously?
 
+Because the sleep_list is a shared data structure, the sleep_list can become corrupted if multiple threads attempt to add to the it at the same time. To prevent this race condition, A lock is added around the list modification in timer_sleep ()
+
 >> A5: How are race conditions avoided when a timer interrupt occurs
 >> during a call to timer_sleep()?
 
-# this is where my error is happening, timer sleep adds the thread to the sleeping list, but has not set up the semaphore when timer_interrupt is called, so timer interrupt goes through the sleeping list and tries to up a semaphore that has not been initialized yet
+A timer interrupt may access and modify the shared sleep_list when another thread is also modifying the sleep_list. To avoid this race condition, a semaphore is used to ensure any modification of the sleep_list is complete before the timer_interrupt accesses the sleep_list.
 
-this could be avoided by only 
 
 ---- RATIONALE ----
 
@@ -68,6 +75,8 @@ this could be avoided by only
 
              PRIORITY SCHEDULING
              ===================
+
+    The sorted_sleep list design was chosen due to its simple, yet effective implementation. Another design that was considered was using a hash table. The hash table would have wake up times as keys and threads/lists of threads as elements. The hash table would allow quick and easy checks at each interrupt to determine if there is a thread that needs to be unblocked, We would just hash the tick at which the interrupt occured. It also allows simple insertion because there is no need for sorting the entries. While the hash table would be fast, it is more complicated and less memory efficient. The hash table data structure is more difficult to understand than a list, therefore implementation and debugging would have taken longer. Hash tables are also less memory efficient than lists (unused buckets and lists within buckets) due to their higher complexity. The trade off between performance and complexity was not worth it, so I chose the sorted sleep_list. The time it takes to check if a thread needs to be unblocked is constant time, and although insertion into the sleep list may take longer as it is O(n) with the size of the list, a binary search implementation can improve insertion to O(log n).
 
 ---- DATA STRUCTURES ----
 
