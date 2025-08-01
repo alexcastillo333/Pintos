@@ -339,13 +339,14 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
+  thread_yield ();
 }
 
 /* Returns the current thread's priority. */
 int
 thread_get_priority (void) 
 {
-  return thread_current ()->priority;
+  return get_priority_thread (thread_current ());
 }
 
 /* Returns thread t's priority or donated prioity if it was donated */
@@ -518,6 +519,13 @@ next_thread_to_run (void)
     return idle_thread;
   else
     return list_entry (list_pop_back (&ready_list), struct thread, elem);
+}
+
+void
+reinsert_ready (struct list_elem *e)
+{
+  list_remove (e);
+  list_insert_ordered (&ready_list, e, priority_compare, NULL);
 }
 
 /* Completes a thread switch by activating the new thread's page

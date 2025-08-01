@@ -118,6 +118,7 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
+  // TODO in lock release, when it calls sema_up the list is corrupted
   if (!list_empty (&sema->waiters)) 
     thread_unblock (list_entry (list_pop_back (&sema->waiters),
                                 struct thread, elem));
@@ -203,7 +204,19 @@ lock_acquire (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
-
+  struct thread *holder = lock->holder;
+  if (holder != NULL)
+  {
+    if (get_priority_thread (thread_current ()) > get_priority_thread (holder))
+      {
+        holder->donor = thread_current ();
+        // TODO: Critical section of code, should use a condition variable to ensure only one thread at a time accesses ready list
+        //if (holder->status == THREAD_READY)
+        //{
+        //  reinsert_ready(&holder->elem);
+        //}
+      }
+  }
   sema_down (&lock->semaphore);
   lock->holder = thread_current ();
 }
@@ -238,8 +251,8 @@ lock_release (struct lock *lock)
 {
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
-
   lock->holder = NULL;
+  thread_current ()->donor = NULL;
   sema_up (&lock->semaphore);
 }
 

@@ -115,7 +115,7 @@ lock release
 >> how your implementation avoids it.  Can you use a lock to avoid
 >> this race?
 
-
+If the current thread is changing its priority in thread_set_priority, then it is interrupted, it is possible that the  create a new thread with new priority, or the inter
 ---- RATIONALE ----
 
 >> B7: Why did you choose this design?  In what ways is it superior to
