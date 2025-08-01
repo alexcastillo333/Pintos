@@ -65,7 +65,7 @@ Because the sleep_list is a shared data structure, the sleep_list can become cor
 >> A5: How are race conditions avoided when a timer interrupt occurs
 >> during a call to timer_sleep()?
 
-A timer interrupt may access and modify the shared sleep_list when another thread is also modifying the sleep_list. To avoid this race condition, a semaphore is used to ensure any modification of the sleep_list is complete before the timer_interrupt accesses the sleep_list.
+A timer interrupt may access and modify the shared sleep_list when another thread is also modifying the sleep_list during a call to timer_sleep (). To avoid this race condition, a semaphore is used to ensure any modification of the sleep_list is complete before the timer_interrupt accesses the sleep_list.
 
 
 ---- RATIONALE ----
@@ -73,10 +73,12 @@ A timer interrupt may access and modify the shared sleep_list when another threa
 >> A6: Why did you choose this design?  In what ways is it superior to
 >> another design you considered?
 
+
+The sorted_sleep list design was chosen due to its simple, yet effective implementation. Another design that was considered was using a hash table. The hash table would have wake up times as keys and threads/lists of threads as elements. The hash table would allow quick and easy checks at each interrupt to determine if there is a thread that needs to be unblocked, We would just hash the tick at which the interrupt occured. It also allows simple insertion into the sleep table because there is no need for sorting the entries. While the hash table would be fast, it is more complicated and less memory efficient. The hash table data structure is more difficult to understand than a list, therefore implementation and debugging would have taken longer. Hash tables are also less memory efficient than lists (unused buckets and lists within buckets) due to their higher complexity. The trade off between performance and complexity was not worth it, so I chose the sorted sleep_list. The time it takes to check if a thread needs to be unblocked is still constant time, and insertion into the sleep list has a O(n) time complexity for the average case.
+
              PRIORITY SCHEDULING
              ===================
 
-    The sorted_sleep list design was chosen due to its simple, yet effective implementation. Another design that was considered was using a hash table. The hash table would have wake up times as keys and threads/lists of threads as elements. The hash table would allow quick and easy checks at each interrupt to determine if there is a thread that needs to be unblocked, We would just hash the tick at which the interrupt occured. It also allows simple insertion because there is no need for sorting the entries. While the hash table would be fast, it is more complicated and less memory efficient. The hash table data structure is more difficult to understand than a list, therefore implementation and debugging would have taken longer. Hash tables are also less memory efficient than lists (unused buckets and lists within buckets) due to their higher complexity. The trade off between performance and complexity was not worth it, so I chose the sorted sleep_list. The time it takes to check if a thread needs to be unblocked is constant time, and although insertion into the sleep list may take longer as it is O(n) with the size of the list, a binary search implementation can improve insertion to O(log n).
 
 ---- DATA STRUCTURES ----
 
@@ -93,17 +95,26 @@ A timer interrupt may access and modify the shared sleep_list when another threa
 >> B3: How do you ensure that the highest priority thread waiting for
 >> a lock, semaphore, or condition variable wakes up first?
 
+The synchronization constructs will keep the list of waiters sorted by priority, so when it is time to unblock a thread, it can simply pop off the highest priority thread in the waiters list, which will be at the end of the list.
+
 >> B4: Describe the sequence of events when a call to lock_acquire()
 >> causes a priority donation.  How is nested donation handled?
 
+When Thread A has a lock, then Thread B calls lock_acquire () on that lock, if thread B has a higher priority than thread A, it will donate its priority to thread A. We will access the holder of the lock, lock A, then set lock A's donor pointer to thread B. Now thread A has access to thread B's priority field. Suppose thread C calls lock_acquire () on a lock that thread B currently owns. This will make thread B's donor pointer point to thread C, If thread C's priority is higher than thread B's priority. If that is the case, then thread A will have access to thread C's priority field through following donor pointers to thread C. 
+
+When a thread calls lock_acquire, we get the locks holder if it has one, and set the donor field of the holder to point to the caller of lock_acquire if the callers priority is larger than the holders current priority.
+
 >> B5: Describe the sequence of events when lock_release() is called
 >> on a lock that a higher-priority thread is waiting for.
+
+lock release 
 
 ---- SYNCHRONIZATION ----
 
 >> B6: Describe a potential race in thread_set_priority() and explain
 >> how your implementation avoids it.  Can you use a lock to avoid
 >> this race?
+
 
 ---- RATIONALE ----
 

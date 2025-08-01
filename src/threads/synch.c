@@ -32,6 +32,9 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+static bool semaphore_elem_compare (const struct list_elem *a,
+                           const struct list_elem*b, void *aux);
+
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
    manipulating it:
@@ -68,7 +71,9 @@ sema_down (struct semaphore *sema)
   old_level = intr_disable ();
   while (sema->value == 0) 
     {
-      list_push_back (&sema->waiters, &thread_current ()->elem);
+      //list_push_back (&sema->waiters, &thread_current ()->elem);
+      list_insert_ordered (&sema->waiters, 
+                           &thread_current ()->elem, priority_compare, NULL);
       thread_block ();
     }
   sema->value--;
@@ -114,10 +119,13 @@ sema_up (struct semaphore *sema)
 
   old_level = intr_disable ();
   if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
+    thread_unblock (list_entry (list_pop_back (&sema->waiters),
                                 struct thread, elem));
   sema->value++;
   intr_set_level (old_level);
+  if (!intr_context ()) {
+    thread_yield ();
+  }
 }
 
 static void sema_test_helper (void *sema_);
@@ -264,6 +272,22 @@ cond_init (struct condition *cond)
   list_init (&cond->waiters);
 }
 
+
+/* Returns true if semaphore_elem a's waiting thread has a lower priority than semaphore_elem b's waiting thread and false otherwise.
+b is the semaphore that will eventually be inserted into the list, so have aux point to the priority that thread b has
+aux points to the value that semaphore  */
+bool semaphore_elem_compare (const struct list_elem *a,
+                             const struct list_elem *b, void *aux)
+{
+  struct semaphore sb = list_entry (b, struct semaphore_elem, elem)->semaphore;
+  int bpriority = list_entry (list_back (&sb.waiters), 
+                              struct thread, elem)->priority;
+  int apriority;
+  apriority = *(int *) aux;
+  return apriority < bpriority;
+}
+
+
 /* Atomically releases LOCK and waits for COND to be signaled by
    some other piece of code.  After COND is signaled, LOCK is
    reacquired before returning.  LOCK must be held before calling
@@ -288,14 +312,15 @@ void
 cond_wait (struct condition *cond, struct lock *lock) 
 {
   struct semaphore_elem waiter;
-
   ASSERT (cond != NULL);
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
   
   sema_init (&waiter.semaphore, 0);
-  list_push_back (&cond->waiters, &waiter.elem);
+  int *aux = (int *) &thread_current ()->priority;
+  list_insert_ordered (&cond->waiters, &waiter.elem, 
+                       semaphore_elem_compare, aux);
   lock_release (lock);
   sema_down (&waiter.semaphore);
   lock_acquire (lock);
@@ -317,8 +342,10 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (lock_held_by_current_thread (lock));
 
   if (!list_empty (&cond->waiters)) 
-    sema_up (&list_entry (list_pop_front (&cond->waiters),
+  {
+    sema_up (&list_entry (list_pop_back (&cond->waiters),
                           struct semaphore_elem, elem)->semaphore);
+  }
 }
 
 /* Wakes up all threads, if any, waiting on COND (protected by

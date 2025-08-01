@@ -96,7 +96,8 @@ struct thread
 
     int64_t wake;                       /* Time at which this thread will be woken up if timer_sleep () has been called. */
     struct list_elem sleepelem;         /* List element for sleeping threads list. */
-    struct semaphore *sleepsema;         /* Used to block when timer_sleep () is called */
+    struct semaphore sleepsema;        /* Used to block when timer_sleep () is called. */
+    struct thread *donor;               /* Points to a thread that donated its priority to this thread. */   
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -135,7 +136,10 @@ void thread_yield (void);
 typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
 
+bool priority_compare (const struct list_elem *a, 
+                       const struct list_elem *b, void *aux);
 int thread_get_priority (void);
+int get_priority_thread (struct thread *t);
 void thread_set_priority (int);
 
 int thread_get_nice (void);

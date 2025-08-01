@@ -41,7 +41,7 @@ static void real_time_delay (int64_t num, int32_t denom);
 static bool sleep_compare (const struct list_elem *a,
                            const struct list_elem*b, void *aux);
 
-/* Return true if sleeping thread a has a sooner wake up time than b*/
+/* Return true if sleeping thread a has a sooner wake up time than b and false otherwise. */
 bool 
 sleep_compare (const struct list_elem *a, const struct list_elem *b, void *aux)
 {
@@ -115,15 +115,16 @@ timer_sleep (int64_t ticks)
   struct thread *t = thread_current ();
   int64_t wake = timer_ticks () + ticks;
   t->wake = wake;
-  t->sleepsema = malloc (sizeof (struct semaphore));
-  sema_init (t->sleepsema, 0);
+  // t->sleepsema = malloc (sizeof (struct semaphore));
+  // sema_init (t->sleepsema, 0);
   sema_down (&ti_sema);
   lock_acquire (&sleep_lock);
   list_insert_ordered (&sleep_list, &t->sleepelem, sleep_compare, NULL);
   lock_release (&sleep_lock);
   sema_up (&ti_sema);
-  sema_down (t->sleepsema);
-  free(t->sleepsema);
+  // sema_down (t->sleepsema);
+  sema_down (&t->sleepsema);
+  //free(t->sleepsema);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -211,7 +212,7 @@ timer_interrupt (struct intr_frame *args UNUSED)
       if (sleeper->wake <= ticks)
       {
         list_remove (front);
-        sema_up (sleeper->sleepsema);
+        sema_up (&sleeper->sleepsema);
       }
       else
         break;
