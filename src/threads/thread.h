@@ -97,7 +97,8 @@ struct thread
     int64_t wake;                       /* Time at which this thread will be woken up if timer_sleep () has been called. */
     struct list_elem sleepelem;         /* List element for sleeping threads list. */
     struct semaphore sleepsema;        /* Used to block when timer_sleep () is called. */
-    struct thread *donor;               /* Points to a thread that donated its priority to this thread. */   
+    struct thread *donor;               /* Points to a thread that donated its priority to this thread. */ 
+    struct list locks;               /* List of locks that are owned by this thead. */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */

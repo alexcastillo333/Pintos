@@ -205,19 +205,16 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
   struct thread *holder = lock->holder;
-  if (holder != NULL)
+  if (holder != NULL) 
   {
-    if (get_priority_thread (thread_current ()) > get_priority_thread (holder))
-      {
-        holder->donor = thread_current ();
-        // TODO: Critical section of code, should use a condition variable to ensure only one thread at a time accesses ready list
-        //if (holder->status == THREAD_READY)
-        //{
-        //  reinsert_ready(&holder->elem);
-        //}
-      }
+    // if this thread has higher priority than current donor to the holder, change the donor pointer to this thread
+    if (list_empty (&lock->semaphore.waiters) || get_priority_thread (list_entry (list_back (&lock->semaphore.waiters), struct thread, elem)) < thread_get_priority ())
+    {
+      holder->donor = thread_current ();
+    }
   }
   sema_down (&lock->semaphore);
+  list_push_back (&thread_current ()->locks, &lock->elem);
   lock->holder = thread_current ();
 }
 
@@ -236,8 +233,11 @@ lock_try_acquire (struct lock *lock)
   ASSERT (!lock_held_by_current_thread (lock));
 
   success = sema_try_down (&lock->semaphore);
-  if (success)
-    lock->holder = thread_current ();
+  if (success) 
+    {
+      list_push_front (&thread_current ()->locks, &lock->elem);
+      lock->holder = thread_current ();
+    }
   return success;
 }
 
@@ -249,10 +249,27 @@ lock_try_acquire (struct lock *lock)
 void
 lock_release (struct lock *lock) 
 {
+  // release the lock then the current thread should go back to its default or other donated priority, it should lose the pointer to the thread that was donating priority
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
   lock->holder = NULL;
   thread_current ()->donor = NULL;
+  list_remove (&lock->elem);
+  if (!list_empty (&thread_current ()->locks))
+  {
+    struct list_elem *e;
+    for (e = list_begin (&thread_current ()->locks); e != list_end(&thread_current ()->locks); e = list_next (e))
+    {
+      struct lock *l = list_entry (e, struct lock, elem);
+      if (!list_empty (&l->semaphore.waiters))
+      {
+        thread_current ()->donor = list_entry (list_back (&l->semaphore.waiters), struct thread, elem);
+        break;
+      }
+    }
+  }
+
+
   sema_up (&lock->semaphore);
 }
 
