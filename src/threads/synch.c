@@ -74,6 +74,7 @@ sema_down (struct semaphore *sema)
       //list_push_back (&sema->waiters, &thread_current ()->elem);
       list_insert_ordered (&sema->waiters, 
                            &thread_current ()->elem, priority_compare, NULL);
+      thread_current ()->waiters = &sema->waiters;
       thread_block ();
     }
   sema->value--;
@@ -211,6 +212,7 @@ lock_acquire (struct lock *lock)
     if (list_empty (&lock->semaphore.waiters) || get_priority_thread (list_entry (list_back (&lock->semaphore.waiters), struct thread, elem)) < thread_get_priority ())
     {
       holder->donor = thread_current ();
+      list_sort (holder->waiters, priority_compare, NULL);
     }
   }
   sema_down (&lock->semaphore);

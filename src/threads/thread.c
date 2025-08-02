@@ -362,11 +362,11 @@ get_priority_thread (struct thread *t)
   return p;
 }
 
-/* Return true if thread a has lower priority than thread b and false otherwise. */
+/* Return true if thread a has less than or equal to priority than thread b and false otherwise. */
 bool 
 priority_compare (const struct list_elem *a, const struct list_elem *b, void *aux)
 {
-  return get_priority_thread (list_entry(a, struct thread, elem)) < 
+  return get_priority_thread (list_entry(a, struct thread, elem)) <= 
          get_priority_thread (list_entry(b, struct thread, elem));
 }
 
