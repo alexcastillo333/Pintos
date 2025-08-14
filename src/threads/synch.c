@@ -71,7 +71,6 @@ sema_down (struct semaphore *sema)
   old_level = intr_disable ();
   while (sema->value == 0) 
     {
-      //list_push_back (&sema->waiters, &thread_current ()->elem);
       list_insert_ordered (&sema->waiters, 
                            &thread_current ()->elem, priority_compare, NULL);
       thread_current ()->waiters = &sema->waiters;
@@ -119,7 +118,6 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
-  // TODO in lock release, when it calls sema_up the list is corrupted
   if (!list_empty (&sema->waiters)) 
     thread_unblock (list_entry (list_pop_back (&sema->waiters),
                                 struct thread, elem));
@@ -208,7 +206,6 @@ lock_acquire (struct lock *lock)
   struct thread *holder = lock->holder;
   if (holder != NULL) 
   {
-    // if this thread has higher priority than current donor to the holder, change the donor pointer to this thread
     if (list_empty (&lock->semaphore.waiters) || get_priority_thread (list_entry (list_back (&lock->semaphore.waiters), struct thread, elem)) < thread_get_priority ())
     {
       holder->donor = thread_current ();
@@ -251,11 +248,11 @@ lock_try_acquire (struct lock *lock)
 void
 lock_release (struct lock *lock) 
 {
-  // release the lock then the current thread should go back to its default or other donated priority, it should lose the pointer to the thread that was donating priority
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
   lock->holder = NULL;
   thread_current ()->donor = NULL;
+  struct thread *donor = NULL;
   list_remove (&lock->elem);
   if (!list_empty (&thread_current ()->locks))
   {
@@ -265,10 +262,13 @@ lock_release (struct lock *lock)
       struct lock *l = list_entry (e, struct lock, elem);
       if (!list_empty (&l->semaphore.waiters))
       {
-        thread_current ()->donor = list_entry (list_back (&l->semaphore.waiters), struct thread, elem);
-        break;
+        struct thread *temp = list_entry (list_back (&l->semaphore.waiters), struct thread, elem);
+        if (donor == NULL || 
+            priority_compare (&donor->elem, &temp->elem, NULL))     
+          donor = temp;
       }
     }
+    thread_current ()->donor = donor;
   }
 
 

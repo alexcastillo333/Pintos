@@ -56,6 +56,7 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+
   list_init (&sleep_list);
   lock_init (&sleep_lock);
   sema_init (&ti_sema, 1);
@@ -115,16 +116,12 @@ timer_sleep (int64_t ticks)
   struct thread *t = thread_current ();
   int64_t wake = timer_ticks () + ticks;
   t->wake = wake;
-  // t->sleepsema = malloc (sizeof (struct semaphore));
-  // sema_init (t->sleepsema, 0);
   sema_down (&ti_sema);
   lock_acquire (&sleep_lock);
   list_insert_ordered (&sleep_list, &t->sleepelem, sleep_compare, NULL);
   lock_release (&sleep_lock);
   sema_up (&ti_sema);
-  // sema_down (t->sleepsema);
   sema_down (&t->sleepsema);
-  //free(t->sleepsema);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
