@@ -21,6 +21,16 @@ FirstName LastName <email@domain.example>
 >> preparing your submission, other than the Pintos documentation, course
 >> text, lecture notes, and course staff.
 
+I used parkjbdev's answer to this question ( https://stackoverflow.com/questions/52472084/pintos-userprog-all-tests-fail-is-kernel-vaddr ) on stackoverflow.
+
+void thread_try_yield(void) {
+  if (!list_empty(&ready_list) && thread_current() != idle_thread)
+    thread_yield();
+}
+
+This function was used because my implementation of locks called the scheduler
+This would cause an assertion failure due to the fact that locks are used before the paging system has been initialized, which causes the assertion failure is_kernel_vaddr when a lock is released and schedule is called before the paging system is initialized.
+
                ARGUMENT PASSING
                ================
 

@@ -71,6 +71,15 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+// Function copied from stackoverflow user parkjbdev
+// https://stackoverflow.com/questions/52472084/pintos-userprog-all-tests-fail-is-kernel-vaddr
+
+// Attemps to call thread yield, only succeeds if the ready list is not empty and the current thread is not the idle thread
+void thread_try_yield(void) {
+  if (!list_empty(&ready_list) && thread_current() != idle_thread)
+    thread_yield();
+}
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
