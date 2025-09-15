@@ -20,7 +20,6 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
-
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
@@ -38,9 +37,6 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  /* TODO must set up the stack with arguments for the user program that were given in file_name. The stack must be set up before the user program starts.
-   */ 
-
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
@@ -56,6 +52,8 @@ start_process (void *file_name_)
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
+
+
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
@@ -197,7 +195,8 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+static void setup_stack_helper (void **esp, char* token, char *save_ptr);
+static bool setup_stack (void **esp, char* token, char *save_ptr);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -222,9 +221,30 @@ load (const char *file_name, void (**eip) (void), void **esp)
   if (t->pagedir == NULL) 
     goto done;
   process_activate ();
+// char s[] = "  String to  tokenize. ";
+//    char *token, *save_ptr;
+
+//    for (token = strtok_r (s, " ", &save_ptr); token != NULL;
+//         token = strtok_r (NULL, " ", &save_ptr))
+//      printf ("'%s'\n", token);
+
+//    outputs:
+
+//      'String'
+//      'to'
+//      'tokenize.'
+
+  
+
+
+  char *token, *save_ptr;
+  // separate the file name from the arguments, file name &save_ptr should have point to the end of file_name if it is only a file name, or the first argument
+
+  token = strtok_r (file_name, " ", &save_ptr);
+
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (token);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
@@ -304,7 +324,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp, token, save_ptr))
     goto done;
 
   /* Start address. */
@@ -426,10 +446,67 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   return true;
 }
 
+
+
+// token should point to the name of the program
+// save ptr should point to the first argument to the program being run or a null terminator
+
+// we also want to keep track of the addresses of the arguments on the stack
+// we can store these addresses where the arguments we just read from are, because after we copy them to the stack, we do not need them again.
+
+static void
+setup_stack_helper (void **esp, char *token, char *save_ptr)
+{
+  int argc = 0;
+  int tokenlen;
+  // offsets will be used to push the pointers to the arguments on the stack
+  // we will use 2 byte long offsets because an argument is at least 2 bytes
+  // min size of an arg is one char and a null terminator = 2 bytes
+  // So store the offsets where the program + arguments string was stored
+  uint16_t offset = 0;
+  uint16_t *offsets = (void *) token; 
+  for (token = token; token != NULL;
+       token = strtok_r (NULL, " ", &save_ptr))
+      {
+        // decrement stack pointer by the length of token + 1 for null terminator, then copy data to stack, also need to save the stack pointers current address
+        tokenlen = strlen (token);
+        offset += tokenlen + 1;
+        *esp = PHYS_BASE - offset;
+        // copy the arg (or program name) to the stack
+        strlcpy (*esp, token, tokenlen + 1);
+        // save the offsets
+        *offsets = 0;
+        *offsets = offset;
+        offsets++;
+        argc++;
+      }
+    
+    // want stack pointer to be word aligned
+    *esp -= (4 - offset % 4 == 4) ? 0 : 4 - offset % 4;
+    //  null pointer, then pointer to each arg from right to left
+    *esp -= sizeof (char *);
+    memset(*esp, 0, sizeof(char *));
+    for (int i = 0; i < argc; i++) {
+      *esp -= sizeof (uintptr_t);
+       *(uintptr_t *) *esp = PHYS_BASE - *(offsets - 1);
+      offsets -= 1;
+    }
+    // // push address of first argument on stack onto stack
+     *esp -= sizeof (uintptr_t);
+     *(uintptr_t *) *esp = *esp + sizeof(uintptr_t);
+    // push argc
+    *esp -= sizeof (int);
+    * (int *)*esp = argc;
+    // push NULL
+    *esp -= sizeof (void *);
+    memset(*esp, 0, sizeof(void *));
+    //stack should be set up
+}
+
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, char *token, char *save_ptr) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -439,7 +516,10 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
-        *esp = PHYS_BASE - 12;
+        {
+          *esp = PHYS_BASE;
+          setup_stack_helper (esp, token, save_ptr);
+        }
       else
         palloc_free_page (kpage);
     }
