@@ -88,6 +88,8 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
+  while (true)
+    child_tid++;
   return -1;
 }
 
@@ -488,7 +490,7 @@ setup_stack_helper (void **esp, char *token, char *save_ptr)
     memset(*esp, 0, sizeof(char *));
     for (int i = 0; i < argc; i++) {
       *esp -= sizeof (uintptr_t);
-       *(uintptr_t *) *esp = PHYS_BASE - *(offsets - 1);
+      *(uintptr_t *) *esp = PHYS_BASE - *(offsets - 1);
       offsets -= 1;
     }
     // // push address of first argument on stack onto stack
@@ -500,7 +502,6 @@ setup_stack_helper (void **esp, char *token, char *save_ptr)
     // push NULL
     *esp -= sizeof (void *);
     memset(*esp, 0, sizeof(void *));
-    //stack should be set up
 }
 
 /* Create a minimal stack by mapping a zeroed page at the top of

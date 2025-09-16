@@ -83,7 +83,7 @@ typedef int tid_t;
    blocked state is on a semaphore wait list. */
 struct thread
   {
-    /* Owned by thread.c. */
+   /* Owned by thread.c. */
     tid_t tid;                          /* Thread identifier. */
     enum thread_status status;          /* Thread state. */
     char name[16];                      /* Name (for debugging purposes). */
@@ -100,7 +100,13 @@ struct thread
     struct list_elem sleepelem;         /* List element for sleeping threads list. */
     struct semaphore sleepsema;        /* Used to block when timer_sleep () is called. */
     struct thread *donor;               /* Points to a thread that donated its priority to this thread. */ 
-    struct list locks;               /* List of locks that are owned by this thead. */
+    struct list locks;               /* List of locks that are owned by this   
+thead. */
+    int file_descriptor;        /* Keeps track of the offset into open_files 
+    that a new file will be placed */
+    struct file **open_files;            /* a pointer to a list of files and 
+      offsets that  are open by this thread/process. */
+    
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */

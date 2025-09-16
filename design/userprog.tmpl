@@ -46,6 +46,16 @@ This would cause an assertion failure due to the fact that locks are used before
 >> you arrange for the elements of argv[] to be in the right order?
 >> How do you avoid overflowing the stack page?
 
+I use strtok_r to break file_name into separate strings separated 
+by spaces. For each string, I get the length of that string, decrement 
+the stack pointer, esp, by length + 1, then copy the string to esp. I also save 
+the offset between the top of the stack and where we copied the string to, and 
+write that offset to where the original string was stored. After all the 
+arguments have been written to the stack, I then push (PHYS_BASE - offset) onto 
+the stack, for each argument, so that we have pointers to the argument strings.
+I have not added anything to prevent overflowing the stack page, but I will set 
+a 1 page limit to the length of the arguments eventually.
+
 ---- RATIONALE ----
 
 >> A3: Why does Pintos implement strtok_r() but not strtok()?
@@ -63,9 +73,21 @@ This would cause an assertion failure due to the fact that locks are used before
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+members added to struct thread
+
+int file_descroptor;
+keeps count of the number of files that have been opened, is also the offset 
+into open_files for when we open a new file 
+
+uintptr_t ** open_files;
+pointers to open files, a file descriptor is the offset at which a file is 
+located
+
 >> B2: Describe how file descriptors are associated with open files.
 >> Are file descriptors unique within the entire OS or just within a
 >> single process?
+
+file descriptors are unqiue within a single process.
 
 ---- ALGORITHMS ----
 
