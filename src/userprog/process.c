@@ -24,18 +24,31 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
+
+
+  // TODO, need to somehow pass struct thread *t = thread->current () to the 
+  // thread that is created by thread_create, so a child can have access to its
+  // parent
+  // We can do this by copying t to the beginning of fn_copy, then 
 tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
   tid_t tid;
 
+  struct thread *parent = thread_current();
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page (0);
+  fn_copy = palloc_get_page (PAL_ZERO);
   if (fn_copy == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+ 
+  memcpy (fn_copy, &parent, 4);
+  
+
+  
+  
+  strlcpy (fn_copy + 4, file_name, PGSIZE);
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
@@ -50,10 +63,12 @@ static void
 start_process (void *file_name_)
 {
   char *file_name = file_name_;
+  //struct thread *parent = (struct thread *) *(uintptr_t *) *(file_name - sizeof (uintptr_t));
   struct intr_frame if_;
   bool success;
-
-
+  struct thread * parent = (struct thread *) *((uintptr_t *) file_name);
+  thread_current ()->parent = parent;
+  file_name += 4;
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
@@ -62,7 +77,7 @@ start_process (void *file_name_)
   success = load (file_name, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
-  palloc_free_page (file_name);
+  palloc_free_page (file_name_);
   if (!success) 
     thread_exit ();
 
@@ -83,13 +98,15 @@ start_process (void *file_name_)
    been successfully called for the given TID, returns -1
    immediately, without waiting.
 
+   // TODO initialize semaphore to 0, call sema down, pass sema to its child, return, then returns the exit status of the child process
+
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
 process_wait (tid_t child_tid UNUSED) 
 {
   while (true)
-    child_tid++;
+    child_tid += 1;
   return -1;
 }
 

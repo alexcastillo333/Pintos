@@ -8,6 +8,7 @@
 #include "devices/input.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#include "userprog/process.h"
 static void syscall_handler (struct intr_frame *);
 
 static void sys_exit(int status)

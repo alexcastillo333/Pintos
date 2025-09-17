@@ -106,6 +106,9 @@ thead. */
     that a new file will be placed */
     struct file **open_files;            /* a pointer to a list of files and 
       offsets that  are open by this thread/process. */
+   struct list children;            /* A list of this threads child processes */
+   struct list_elem childelem;       /* elem of child list*/
+   struct thread *parent;           /* point to parent thread of this thread */ 
     
 
 #ifdef USERPROG
