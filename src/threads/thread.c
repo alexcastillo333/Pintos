@@ -8,12 +8,15 @@
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
+
+extern struct lock filesys_lock;
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -98,6 +101,7 @@ thread_init (void)
 {
   ASSERT (intr_get_level () == INTR_OFF);
 
+  lock_init (&filesys_lock);
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
@@ -190,6 +194,7 @@ thread_create (const char *name, int priority,
 
   /* Initialize thread. */
   init_thread (t, name, priority);
+
   tid = t->tid = allocate_tid ();
 
   /* Stack frame for kernel_thread(). */
@@ -371,7 +376,8 @@ get_priority_thread (struct thread *t)
 
 /* Return true if thread a has less than or equal to priority than thread b and false otherwise. */
 bool 
-priority_compare (const struct list_elem *a, const struct list_elem *b, void *aux)
+priority_compare (const struct list_elem *a, const struct list_elem *b, 
+                  UNUSED void *aux)
 {
   return get_priority_thread (list_entry(a, struct thread, elem)) <= 
          get_priority_thread (list_entry(b, struct thread, elem));
@@ -497,6 +503,9 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
   list_init (&t->locks);
   sema_init (&t->sleepsema, 0);
+  sema_init (&t->processexec, 0);
+  sema_init (&t->processwait, 0);
+  
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);

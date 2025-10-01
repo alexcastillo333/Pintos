@@ -3,113 +3,241 @@
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/vaddr.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
+#include "threads/synch.h"
 #include "devices/shutdown.h"
 #include "devices/input.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "userprog/process.h"
+#include "userprog/pagedir.h"
 static void syscall_handler (struct intr_frame *);
-
-static void sys_exit(int status)
+extern struct lock filesys_lock;
+// return true if bad user memory pointer, false otherwise
+static bool bad_mem_access (void *uaddr)
 {
+  return (uaddr == NULL || is_kernel_vaddr (uaddr + 3) || 
+          pagedir_get_page (thread_current ()->pagedir, uaddr) == NULL ||
+          pagedir_get_page (thread_current ()->pagedir, uaddr + 3) == NULL);
+}
+
+void sys_exit (struct intr_frame *f, void *p)
+{
+  int status;
+  if (p == NULL || bad_mem_access (f->esp + 4))
+    status = -1;
+  else
+    status = *(int *) (f->esp + 4);
+  
+  f->eax = status;
+  struct thread *cur = thread_current ();
+  cur->exitstatus = status;
+  struct thread *parent = cur->parent;
+  *(parent->childrenexit - parent->firstchild + cur->tid) = status;
+  *(parent->childrenthreads - parent->firstchild + cur->tid) = NULL;
+  //parent->childexit = status;
   thread_exit();
 }
-
-static int sys_exec(const char *cmd_line)
+/*Runs the executable whose name is given in cmd_line, passing any given arguments, and returns the new process's program id (pid). Must return pid -1, which otherwise should not be a valid pid, if the program cannot load or run for any reason. Thus, the parent process cannot return from the exec until it knows whether the child process successfully loaded its executable. You must use appropriate synchronization to ensure this.*/
+static int sys_exec(struct intr_frame *f)
 {
-  return 0;
-}
-
-static int sys_wait(int pid)
-{
-  while (pid > 0)
-    pid++;
-  return 0;
-}
-
-static bool sys_create (const char *file, unsigned initial_size)
-{
-  return filesys_create (file, initial_size);
-}
-
-static bool sys_remove (const char *file) {
-  return filesys_remove (file);
-}
-
-static int sys_open (const char *file)
-{
+  void *arg1 = f->esp + 4;
+  /*if (PHYS_BASE < arg1 + 4 || 
+      pagedir_get_page (thread_current ()->pagedir, arg1) == NULL ||
+      pagedir_get_page (thread_current ()->pagedir, arg1 + 3) == NULL || bad_mem_access ((void *) *(uintptr_t *) arg1))*/
+  if (bad_mem_access (arg1) || bad_mem_access ((void *) *(uintptr_t *) arg1))
+    sys_exit (f, NULL);
+  
+  const char *cmd_line = (const char *) *(uintptr_t *) arg1;
   struct thread *t = thread_current ();
-  struct file* f = filesys_open (file);
-  if (f == NULL)
+  //sema_init (&t->processexec, 0);
+  int pid = process_execute (cmd_line);
+  sema_down (&t->processexec);
+  if (pid == TID_ERROR)
+    return -1;
+
+  // TODO, child may have failed to load its executable, so this line is 
+  // needed to check the exit status of the child, even if a process was 
+  // successfully created with thread create
+  //pid = (t->childexit == -1) ? -1 : pid;
+  if (*(t->childrenexit - t->firstchild + pid) == -1)
+  { 
+    return -1;
+  }
+
+  return pid;
+}
+
+static int sys_wait(struct intr_frame *f)
+{
+  if (bad_mem_access (f->esp + 4))
+    sys_exit (f, NULL);
+  int pid = *(int *) (f->esp + 4);
+  //printf("%d is waiting on %d\n", thread_current ()->tid, pid);
+  return process_wait (pid);
+}
+
+static bool sys_create (struct intr_frame *f)
+{
+  void *arg1 = f->esp + 4;
+  if (bad_mem_access (arg1 + 4) || bad_mem_access ((void *) *(uintptr_t *) arg1))
+    sys_exit (f, NULL);
+  const char *file = (const char *) *(uintptr_t *) arg1;
+  unsigned initial_size = *(unsigned *) (arg1 + 4);
+  lock_acquire (&filesys_lock);
+  bool ret = filesys_create (file, initial_size);
+  lock_release (&filesys_lock);
+  return ret;
+}
+
+static bool sys_remove (struct intr_frame *f) {
+  if (bad_mem_access (f->esp + 4) || 
+      bad_mem_access ((void *) *(uintptr_t *) (f->esp + 4)))
+    sys_exit (f, NULL);  
+  const char *file = (const char *) *(uintptr_t *) (f->esp + 4);
+  lock_acquire (&filesys_lock);
+  bool ret = filesys_remove (file);
+  lock_release (&filesys_lock);
+  return ret;
+}
+
+static int sys_open (struct intr_frame *f)
+{
+  void *arg1 = (f->esp + 4);
+  if (bad_mem_access (arg1) || bad_mem_access ((void *) *(uintptr_t *) arg1))
+    sys_exit (f, NULL);
+  const char *file_name = (const char *) *(uintptr_t *) arg1;
+  struct thread *t = thread_current ();
+  lock_acquire (&filesys_lock);
+  struct file* file = filesys_open (file_name);
+  lock_release (&filesys_lock);
+  if (file == NULL)
     return -1;
   if (t->open_files == NULL)
   {
-    t->open_files = palloc_get_page(PAL_ASSERT & PAL_ZERO);
+    t->open_files = palloc_get_page(PAL_ASSERT ^ PAL_ZERO);
   }
-  *(uintptr_t *) *(t->open_files + t->file_descriptor) = (uintptr_t) f;
+  *(uintptr_t *) (t->open_files + t->file_descriptor) = (uintptr_t) file;
   return 2 + t->file_descriptor++;
 }
 
-static int sys_filesize (int fd)
+static int sys_filesize (struct intr_frame *f)
 {
+  if (bad_mem_access (f->esp + 4))
+    sys_exit (f, NULL);
+  int fd = *(int *) (f->esp + 4);
   struct thread *t = thread_current ();
-  struct file* f = (struct file *) *(uintptr_t *) *(t->open_files + fd - 2);
-  return (f == NULL) ? 0 : file_length (f);
+  struct file* file = (struct file *) *(uintptr_t *) (t->open_files + fd - 2);
+  lock_acquire (&filesys_lock);
+  int ret = (file == NULL) ? 0 : file_length (file);
+  lock_release (&filesys_lock);
+  return ret;
 }
 
-static int sys_read (int fd, void *buffer, unsigned size)
+static int sys_read (struct intr_frame *f)
 {
-  if (fd <= 1) 
+  void *arg1 = f->esp + 4;
+  if (bad_mem_access (arg1 + 8) || 
+      bad_mem_access ((void *) *(uintptr_t *) (arg1 + 4)))
+      sys_exit(f, NULL);
+  struct thread *t = thread_current ();
+  int fd = *(int *) arg1;
+  void *buffer = (void *) *(uintptr_t *) (arg1 + 4);
+  unsigned size = *(unsigned *) (arg1 + 8);
+  
+  if (fd == 1 || t->file_descriptor < fd - 2)
+    sys_exit (f, NULL);
+  else if (fd == 0) 
   {
     input_getc();
     size = 1;
-    //putbuf (buffer, size);
-  // is fd == 0 possilbe? write to std input?
-  } else {
-    struct thread *t = thread_current ();
-    struct file* f = (struct file *) *(uintptr_t *) *(t->open_files + fd - 2);
-    size = (f == NULL) ? -1 : file_read (f, buffer, size);
-  }
-  return size;
-}
-
-static int sys_write(int fd, const void *buffer, unsigned size)
-{
-  
-  if (fd <= 1) 
+  } 
+  else 
   {
-    putbuf (buffer, size);
-  // is fd == 0 possilbe? write to std input?
-  } else {
-    struct thread *t = thread_current ();
-    struct file* f = (struct file *) *(uintptr_t *) *(t->open_files + fd - 2);
-    size = (f == NULL) ? 0 : file_write (f, buffer, size);
+    struct file* file = (struct file *) *(uintptr_t *) (t->open_files + fd - 2);
+    lock_acquire (&filesys_lock);
+    size = (file == NULL) ? -1 : file_read (file, buffer, size);
+    lock_release (&filesys_lock);
   }
   return size;
 }
 
-static void sys_seek (int fd, unsigned position)
-{
+static int sys_write (struct intr_frame *f)
+{  
+  void *arg1 = f->esp + 4;
+  if (bad_mem_access (arg1 + 8) || 
+    bad_mem_access ((void *) *(uintptr_t *) (arg1 + 4)))
+    sys_exit(f, NULL);
+  int fd = *(int *) arg1;
+  void *buffer = (const void *) *(uintptr_t *) (arg1 + 4);
+  unsigned size = *(unsigned *) (arg1 + 8);
   struct thread *t = thread_current ();
-  struct file* f = (struct file *) *(uintptr_t *) *(t->open_files + fd - 2);
-  if (f != NULL)
-    file_seek (f, position);
+  if (fd == 1) 
+    putbuf (buffer, size);
+  else if (fd == 0 || t->file_descriptor < fd - 2)
+    sys_exit (f, NULL);
+  else 
+  {
+    struct file* file = (struct file *) *(uintptr_t *) (t->open_files + fd - 2);
+    lock_acquire (&filesys_lock);
+    size = (file == NULL) ? 0 : file_write (file, buffer, size);
+    lock_release (&filesys_lock);
+  }
+  return size;
 }
 
-static unsigned sys_tell (int fd)
+static void sys_seek (struct intr_frame *f)
 {
+  void *arg1 = f->esp + 4;
+  if (bad_mem_access (arg1 + 4))
+    sys_exit (f, NULL);
+  int fd = *(int *) arg1;
+  unsigned position = *(unsigned *) (arg1 + 4);
   struct thread *t = thread_current ();
-  struct file* f = (struct file *) *(uintptr_t *) *(t->open_files + fd - 2);
-  return (f != NULL) ? -1 : file_tell (f);
+  struct file* file = (struct file *) *(uintptr_t *) (t->open_files + fd - 2);
+  if (file != NULL)
+  {
+    lock_acquire (&filesys_lock);
+    file_seek (file, position);
+    lock_release (&filesys_lock);
+  }
 }
 
-static void sys_close (int fd)
+static unsigned sys_tell (struct intr_frame *f)
 {
+  void *arg1 = f->esp + 4;
+  if (bad_mem_access (arg1))
+    sys_exit (f, NULL);
+  int fd = *(int *) arg1;
   struct thread *t = thread_current ();
-  struct file* f = (struct file *) *(uintptr_t *) *(t->open_files + fd - 2);
-  if (f != NULL)
-    file_close (f);
+  struct file* file = (struct file *) *(uintptr_t *) (t->open_files + fd - 2);
+  lock_acquire (&filesys_lock);
+  unsigned ret = (file != NULL) ? -1 : file_tell (file);
+  lock_release (&filesys_lock);
+  return ret;
+}
+
+static void sys_close (struct intr_frame *f)
+{
+  void *arg1 = f->esp + 4;
+  if (bad_mem_access (arg1))
+    sys_exit (f, NULL);
+  struct thread *t = thread_current ();
+  int fd = *(int *) arg1;
+  if (fd <= 1 || t->file_descriptor < fd - 2)
+    sys_exit (f, NULL);
+  if (t->open_files == NULL)
+    sys_exit (f, NULL);
+  struct file *file = (struct file *) *(uintptr_t *) (t->open_files + fd - 2);
+  *(uintptr_t *) (t->open_files + fd - 2) = NULL;
+  if (file == NULL)
+    sys_exit (f, NULL);
+  lock_acquire (&filesys_lock);
+  file_close (file);
+  lock_release (&filesys_lock);
+  
 }
 
 void
@@ -121,6 +249,8 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
+  if (bad_mem_access (f->esp))
+    sys_exit (f, NULL);
   int ret = 0;
   switch (* (int *)f->esp)
   {
@@ -128,50 +258,57 @@ syscall_handler (struct intr_frame *f UNUSED)
       shutdown_power_off ();
       break;
     case SYS_EXIT:
-      sys_exit (0);
+      sys_exit (f, (f->esp + 4));
       break;
     case SYS_EXEC:
-      ret = sys_exec("");
+      ret = sys_exec (f);
       break;
     case SYS_WAIT:
-      ret = sys_wait(1);
+      ret = sys_wait (f);
       break;
     case SYS_CREATE:
-      ret = sys_create ((const char *) *(uintptr_t *) (f->esp + 4),
-                        *(int *) (f->esp + 8));
+      ret = sys_create (f);
       break;
     case SYS_REMOVE:
-      ret = sys_remove ((const char *) *(uintptr_t *) (f->esp + 4));
+      ret = sys_remove (f);
       break;
     case SYS_OPEN:
-      ret = sys_open ((const char *) *(uintptr_t *) (f->esp + 4));
+      ret = sys_open (f);
       break;
     case SYS_FILESIZE:
-      ret = sys_filesize (*(int *) (f->esp + 4));
+      ret = sys_filesize (f);
       break;
     case SYS_READ:
-      ret = sys_read (*(int *) (f->esp + 4), 
-                      (void *) *(uintptr_t *) (f->esp + 8), 
-                      *(unsigned *) (f->esp + 12));
+      ret = sys_read (f);
       break;
     case SYS_WRITE:
-      ret = sys_write (*(int *) (f->esp + 4), 
-                       (const void *) *(uintptr_t *) (f->esp + 8), 
-                       *(unsigned *) (f->esp + 12));
+      ret = sys_write (f);
       break;
     case SYS_SEEK:
-      sys_seek (*(int *) (f->esp + 4), *(unsigned *) (f->esp + 8));
+      sys_seek (f);
       break;
     case SYS_TELL:
-      ret = sys_tell (*(int *) (f->esp + 4));
+      ret = sys_tell (f);
       break;
     case SYS_CLOSE:
-      sys_close (*(int *) (f->esp + 4));
+      sys_close (f);
+      break;
+    default:
+      sys_exit (f, NULL);
       break;
   }
     f->eax = ret;
-  //printf ("system call!\n");
-  //thread_exit ();
 }
 
-// pintos -v -k -T 60 --qemu  --filesys-size=2 -p tests/userprog/args-multiple -a args-multiple -- -q  -f run 'args-multiple some arguments for you!' < /dev/null 2> tests/userprog/args-multiple.errors > tests/userprog/args-multiple.output
+/*
+
+
+FAIL tests/userprog/no-vm/multi-oom 
+
+
+pintos-mkdisk filesys.dsk --filesys-size=2
+pintos -f -q
+
+pintos -p tests/userprog/no-vm/multi-oom -a multi-oom -- -q
+*/
+

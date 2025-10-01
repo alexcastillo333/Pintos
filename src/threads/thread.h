@@ -106,10 +106,20 @@ thead. */
     that a new file will be placed */
     struct file **open_files;            /* a pointer to a list of files and 
       offsets that  are open by this thread/process. */
-   struct list children;            /* A list of this threads child processes */
-   struct list_elem childelem;       /* elem of child list*/
    struct thread *parent;           /* point to parent thread of this thread */ 
-    
+   struct semaphore processwait;  /* a parent will initialize its child 
+   processwait semaphore to 0 then call down, the child will call up when it
+   exits*/
+   struct semaphore processexec;     /* parent will initialize its processexec to 0 then down, the child will up semaphore after attempting to load executable */
+   int exitstatus;
+   struct file *executable;         /*points to this process's executable file*/
+   int firstchild;         // tid of this process's first child, this child's 
+   // exit status will have offset 0 in the children array
+   int *childrenexit;
+         // mapping from tid to exit status, when a child exits, it will put 
+         // the exit status into this array in the parent
+   struct thread **childrenthreads;
+
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
