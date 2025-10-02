@@ -41,9 +41,11 @@ process_execute (const char *file_name)
 
   struct thread *parent = thread_current();
   if (parent->childrenexit == NULL)
-    parent->childrenexit = malloc (256);
+    parent->childrenexit = palloc_get_page (PAL_ZERO);
+    //parent->childrenexit = malloc (256);
   if (parent->childrenthreads == NULL)
-    parent->childrenthreads = malloc(256);
+    parent->childrenthreads = palloc_get_page (PAL_ZERO);
+    //parent->childrenthreads = malloc(256);
 
 
 
@@ -183,8 +185,10 @@ process_exit (void)
   //   process_wait (cur->firstchild + i);
   // }
   // }
-    free (cur->childrenthreads);
-    free (cur->childrenexit);
+    //free (cur->childrenthreads);
+    //free (cur->childrenexit);
+    palloc_free_page (cur->childrenthreads);
+    palloc_free_page (cur->childrenexit);
 
 
   /* Destroy the current process's page directory and switch back
