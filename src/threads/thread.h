@@ -113,12 +113,13 @@ thead. */
    struct semaphore processexec;     /* parent will initialize its processexec to 0 then down, the child will up semaphore after attempting to load executable */
    int exitstatus;
    struct file *executable;         /*points to this process's executable file*/
-   int firstchild;         // tid of this process's first child, this child's 
-   // exit status will have offset 0 in the children array
-   int *childrenexit;
+   struct list children;         // list of this process's children
+   struct list_elem childrenelem;  // element of children list
+   struct lock childrenlock;  // children list is critical section
+   int childexitstatus;          // when this thread calls wait, the child that 
+   // it waited on will set this member in its parent to its exit status
          // mapping from tid to exit status, when a child exits, it will put 
          // the exit status into this array in the parent
-   struct thread **childrenthreads;
 
 
 #ifdef USERPROG

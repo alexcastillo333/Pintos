@@ -35,8 +35,6 @@ void sys_exit (struct intr_frame *f, void *p)
   struct thread *cur = thread_current ();
   cur->exitstatus = status;
   struct thread *parent = cur->parent;
-  *(parent->childrenexit - parent->firstchild + cur->tid) = status;
-  *(parent->childrenthreads - parent->firstchild + cur->tid) = NULL;
   //parent->childexit = status;
   thread_exit();
 }
@@ -44,29 +42,16 @@ void sys_exit (struct intr_frame *f, void *p)
 static int sys_exec(struct intr_frame *f)
 {
   void *arg1 = f->esp + 4;
-  /*if (PHYS_BASE < arg1 + 4 || 
-      pagedir_get_page (thread_current ()->pagedir, arg1) == NULL ||
-      pagedir_get_page (thread_current ()->pagedir, arg1 + 3) == NULL || bad_mem_access ((void *) *(uintptr_t *) arg1))*/
   if (bad_mem_access (arg1) || bad_mem_access ((void *) *(uintptr_t *) arg1))
     sys_exit (f, NULL);
   
   const char *cmd_line = (const char *) *(uintptr_t *) arg1;
   struct thread *t = thread_current ();
-  //sema_init (&t->processexec, 0);
   int pid = process_execute (cmd_line);
-  sema_down (&t->processexec);
   if (pid == TID_ERROR)
     return -1;
-
-  // TODO, child may have failed to load its executable, so this line is 
-  // needed to check the exit status of the child, even if a process was 
-  // successfully created with thread create
-  //pid = (t->childexit == -1) ? -1 : pid;
-  if (*(t->childrenexit - t->firstchild + pid) == -1)
-  { 
-    return -1;
-  }
-
+  //sema_down (&t->processexec);
+  pid = (t->childexitstatus == -1) ? -1 : pid;
   return pid;
 }
 
@@ -75,7 +60,6 @@ static int sys_wait(struct intr_frame *f)
   if (bad_mem_access (f->esp + 4))
     sys_exit (f, NULL);
   int pid = *(int *) (f->esp + 4);
-  //printf("%d is waiting on %d\n", thread_current ()->tid, pid);
   return process_wait (pid);
 }
 
@@ -117,7 +101,9 @@ static int sys_open (struct intr_frame *f)
     return -1;
   if (t->open_files == NULL)
   {
-    t->open_files = palloc_get_page(PAL_ASSERT ^ PAL_ZERO);
+    // limit number of open files to 128
+    t->open_files = malloc (sizeof (uintptr_t) * 128);
+    //t->open_files = palloc_get_page(PAL_ASSERT ^ PAL_ZERO);
   }
   *(uintptr_t *) (t->open_files + t->file_descriptor) = (uintptr_t) file;
   return 2 + t->file_descriptor++;
@@ -310,5 +296,21 @@ pintos-mkdisk filesys.dsk --filesys-size=2
 pintos -f -q
 
 pintos -p tests/userprog/no-vm/multi-oom -a multi-oom -- -q
+
+
+instead of using array for children, use linked list
+a thread can only wait for one child at a time, so we
+use just childexit for the child's exit status
+we need to ensure that the child that has just exited notifies the
+parent that it has exited,
+also when a thread exits, need to call process_wait on each of its children
+
+
+
+
+
+
+
+a zombie waiting for its parent -> zombie thread has finished executing, but parent has not or will not call wait on that thread.
 */
 

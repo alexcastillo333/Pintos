@@ -40,17 +40,6 @@ process_execute (const char *file_name)
     return TID_ERROR;
 
   struct thread *parent = thread_current();
-  if (parent->childrenexit == NULL)
-    parent->childrenexit = palloc_get_page (PAL_ZERO);
-    //parent->childrenexit = malloc (256);
-  if (parent->childrenthreads == NULL)
-    parent->childrenthreads = palloc_get_page (PAL_ZERO);
-    //parent->childrenthreads = malloc(256);
-
-
-
-
-
   char *end = strchr(file_name, 32);
   int len = (end == NULL) ? strlen(file_name) : end - file_name;
   char *name = (char *) malloc(len + 1);
@@ -61,6 +50,7 @@ process_execute (const char *file_name)
   
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (name, PRI_DEFAULT, start_process, fn_copy);
+  sema_down (&parent->processexec);
   free (name);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
@@ -77,36 +67,30 @@ start_process (void *file_name_)
   bool success;
   struct thread * parent = (struct thread *) *((uintptr_t *) file_name);
   struct thread *cur = thread_current ();
- // sema_init (&cur->processwait, 0);
   cur->parent = parent;
-    *(uintptr_t *) (parent->childrenthreads - parent->firstchild + cur->tid) = (uintptr_t) cur;
-  //list_push_front (&parent->children, &cur->childelem);
   file_name += 4;
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+  lock_acquire (&filesys_lock);
   success = load (file_name, &if_.eip, &if_.esp);
+  lock_release (&filesys_lock);
   /* If load failed, quit. */
   palloc_free_page (file_name_);
-  if (parent->firstchild == 0)
+  if (success)
   {
-    parent->firstchild = cur->tid;
-  }
-  *(uintptr_t *) (parent->childrenthreads - parent->firstchild + cur->tid) = (uintptr_t) cur;
-   if (!success)
-   {
-    *(parent->childrenexit - parent->firstchild + cur->tid) = -1;
-   }
-   sema_up (&parent->processexec);
- // }
-  if (!success) 
-  {
+    lock_acquire (&parent->childrenlock);
+    list_push_front (&parent->children, &cur->childrenelem);
+    lock_release (&parent->childrenlock);
+    sema_up (&parent->processexec);
+  } else {
     cur->exitstatus = -1;
+    parent->childexitstatus = -1;
+    sema_up (&parent->processexec);
     thread_exit ();
   }
-
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -132,15 +116,22 @@ int
 process_wait (tid_t child_tid) 
 {
   struct thread *t = thread_current ();
-  struct thread *child = *(t->childrenthreads + child_tid - t->firstchild);
-  *(t->childrenthreads + child_tid - t->firstchild) = NULL;
-  int exitstatus = *(t->childrenexit + child_tid - t->firstchild);
-  if (child == NULL)
-    return (exitstatus < 0) ? -1 : exitstatus;
-
-  sema_down (&child->processwait);
-  int ret = *(t->childrenexit + child_tid - t->firstchild);
-  *(t->childrenexit + child_tid - t->firstchild) = -1;
+  int ret = -1;
+  struct list_elem *e;
+  lock_acquire (&t->childrenlock);
+  for (e = list_begin (&t->children); e != list_end (&t->children);
+       e = list_next (e))
+  {
+          struct thread *child = list_entry (e, struct thread, childrenelem);
+          if (child->tid == child_tid)
+          {
+            sema_down (&child->processwait);
+            ret = child->exitstatus;
+            list_remove (e);
+            break;
+          }
+  }
+  lock_release (&t->childrenlock);
   return ret;
 
 }
@@ -151,7 +142,6 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   printf("%s: exit(%d)\n", cur->name, cur->exitstatus);
-
   uint32_t *pd;
   lock_acquire (&filesys_lock);
   for (int i = 0; i < cur->file_descriptor; i++)
@@ -166,30 +156,22 @@ process_exit (void)
   if (cur->executable != NULL)   
     file_allow_write (cur->executable);
   lock_release (&filesys_lock);
- 
-    sema_up (&cur->processwait);  
-
   if (cur->open_files != NULL)
-    palloc_free_page (cur->open_files);
+    free (cur->open_files);
   if (cur->executable != NULL)
   {
     lock_acquire (&filesys_lock);
     file_close (cur->executable);
     lock_release (&filesys_lock);
   }
-    // reap zombie threads
-  // if (cur->firstchild != 0)
-  // {
-  // for (int i = 0; i < 32; i++)
-  // {
-  //   process_wait (cur->firstchild + i);
-  // }
-  // }
-    //free (cur->childrenthreads);
-    //free (cur->childrenexit);
-    palloc_free_page (cur->childrenthreads);
-    palloc_free_page (cur->childrenexit);
-
+  struct list_elem *e;
+  for (e = list_begin (&cur->locks); e != list_end (&cur->locks);
+      e = list_next (e))
+   {
+      //printf("release lock\n");
+      struct lock *l = list_entry (e, struct lock, elem);
+      lock_release (l);
+   }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -207,6 +189,7 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+    sema_up (&cur->processwait);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -321,9 +304,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
   token = strtok_r ((char *) file_name, " ", &save_ptr);
 
   /* Open executable file. */
-  lock_acquire (&filesys_lock);
+  //lock_acquire (&filesys_lock);
   file = filesys_open (token);
-  lock_release (&filesys_lock);
+  //lock_release (&filesys_lock);
 
   t->executable = file;
   if (file == NULL) 
@@ -331,14 +314,14 @@ load (const char *file_name, void (**eip) (void), void **esp)
       printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
-  lock_acquire (&filesys_lock);
+  //lock_acquire (&filesys_lock);
   file_deny_write (file);
-  lock_release (&filesys_lock);
+  //lock_release (&filesys_lock);
 
   /* Read and verify executable header. */
-  lock_acquire (&filesys_lock);
+  //lock_acquire (&filesys_lock);
   filesys_check = file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr;
-  lock_release (&filesys_lock);
+  //lock_release (&filesys_lock);
 
   if (filesys_check
       || memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7)
@@ -357,15 +340,15 @@ load (const char *file_name, void (**eip) (void), void **esp)
   for (i = 0; i < ehdr.e_phnum; i++) 
     {
       struct Elf32_Phdr phdr;
-      lock_acquire (&filesys_lock);
+      //lock_acquire (&filesys_lock);
       filesys_check = file_ofs > file_length (file);
-      lock_release (&filesys_lock);
+      //lock_release (&filesys_lock);
       if (file_ofs < 0 || filesys_check)
         goto done;
-      lock_acquire (&filesys_lock);
+      //lock_acquire (&filesys_lock);
       file_seek (file, file_ofs);
       filesys_check = file_read (file, &phdr, sizeof phdr) != sizeof phdr;
-      lock_release (&filesys_lock);
+      //lock_release (&filesys_lock);
       if (filesys_check)
         goto done;
       file_ofs += sizeof phdr;
@@ -444,9 +427,9 @@ validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
 
   /* p_offset must point within FILE. */
 
-  lock_acquire (&filesys_lock);
+  //lock_acquire (&filesys_lock);
   off_t offset = file_length (file);
-  lock_release (&filesys_lock);
+  //lock_release (&filesys_lock);
   if (phdr->p_offset > (Elf32_Off) offset) 
     return false;
   // if (phdr->p_offset > (Elf32_Off) file_length (file)) 
@@ -506,9 +489,9 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
 
-  lock_acquire (&filesys_lock);
+  //lock_acquire (&filesys_lock);
   file_seek (file, ofs);
-  lock_release (&filesys_lock);
+  //lock_release (&filesys_lock);
   while (read_bytes > 0 || zero_bytes > 0) 
     {
       /* Calculate how to fill this page.
@@ -523,9 +506,9 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
         return false;
 
       /* Load this page. */
-      lock_acquire (&filesys_lock);
+      //lock_acquire (&filesys_lock);
       int read = file_read (file, kpage, page_read_bytes);
-      lock_release (&filesys_lock);
+      //lock_release (&filesys_lock);
       if (read != (int) page_read_bytes)
       {
         palloc_free_page (kpage);

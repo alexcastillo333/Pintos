@@ -502,6 +502,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
   list_init (&t->locks);
+    lock_init (&t->childrenlock);
+  list_init (&t->children);
   sema_init (&t->sleepsema, 0);
   sema_init (&t->processexec, 0);
   sema_init (&t->processwait, 0);

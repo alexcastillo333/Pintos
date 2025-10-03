@@ -161,14 +161,14 @@ page_fault (struct intr_frame *f)
 //           write ? "writing" : "reading",
 //           user ? "user" : "kernel");
   // need to release any locks that this thread has
-  struct list_elem *e;
-  for (e = list_begin (&t->locks); e != list_end (&t->locks);
-      e = list_next (e))
-   {
-      //printf("release lock\n");
-      struct lock *l = list_entry (e, struct lock, elem);
-      lock_release (l);
-   }
+//   struct list_elem *e;
+//   for (e = list_begin (&t->locks); e != list_end (&t->locks);
+//       e = list_next (e))
+//    {
+//       //printf("release lock\n");
+//       struct lock *l = list_entry (e, struct lock, elem);
+//       lock_release (l);
+//    }
   thread_current ()->exitstatus = -1;
   sys_exit (f, NULL);
   //thread_exit ();
