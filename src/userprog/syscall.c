@@ -34,6 +34,7 @@ void sys_exit (struct intr_frame *f, void *p)
   f->eax = status;
   struct thread *cur = thread_current ();
   cur->exitstatus = status;
+  sema_down (&cur->processexit);
   struct thread *parent = cur->parent;
   //parent->childexit = status;
   thread_exit();
@@ -99,12 +100,11 @@ static int sys_open (struct intr_frame *f)
   lock_release (&filesys_lock);
   if (file == NULL)
     return -1;
-  if (t->open_files == NULL)
-  {
-    // limit number of open files to 128
-    t->open_files = malloc (sizeof (uintptr_t) * 128);
-    //t->open_files = palloc_get_page(PAL_ASSERT ^ PAL_ZERO);
-  }
+  // if (t->open_files == NULL)
+  // {
+  //   // limit number of open files to 128
+  //   t->open_files = malloc (sizeof (uintptr_t) * 128);
+  // }
   *(uintptr_t *) (t->open_files + t->file_descriptor) = (uintptr_t) file;
   return 2 + t->file_descriptor++;
 }
@@ -212,14 +212,19 @@ static void sys_close (struct intr_frame *f)
     sys_exit (f, NULL);
   struct thread *t = thread_current ();
   int fd = *(int *) arg1;
-  if (fd <= 1 || t->file_descriptor < fd - 2)
+  // we have opened file_descriptor files, if we are asked to open a file 
+  // descriptor that is for stdin or std out, or a file descriptor that we have 
+  // not opened yet, exit
+  if (fd <= 1 || t->file_descriptor <= fd - 2)
     sys_exit (f, NULL);
   if (t->open_files == NULL)
     sys_exit (f, NULL);
   struct file *file = (struct file *) *(uintptr_t *) (t->open_files + fd - 2);
   *(uintptr_t *) (t->open_files + fd - 2) = NULL;
   if (file == NULL)
+  { 
     sys_exit (f, NULL);
+  }
   lock_acquire (&filesys_lock);
   file_close (file);
   lock_release (&filesys_lock);
@@ -306,11 +311,15 @@ parent that it has exited,
 also when a thread exits, need to call process_wait on each of its children
 
 
-
-
-
-
-
 a zombie waiting for its parent -> zombie thread has finished executing, but parent has not or will not call wait on that thread.
+
+pintos -v -k -T 300 --qemu  --filesys-size=2 -p tests/filesys/base/syn-read -a syn-read -p tests/filesys/base/child-syn-read -a child-syn-read -- -q  -f run syn-read
+
+pintos -v -k -T 360 --qemu  --filesys-size=2 -p tests/userprog/no-vm/multi-oom -a multi-oom -- -q  -f run multi-oom
+
+pintos -v -k -T 60 --qemu  --filesys-size=2 -p tests/filesys/base/syn-write -a syn-write -p tests/filesys/base/child-syn-wrt -a child-syn-wrt -- -q  -f run syn-write
+
+
+pintos -v -k -T 60 --qemu  --filesys-size=2 -p tests/userprog/multi-child-fd -a multi-child-fd -p ../../tests/userprog/sample.txt -a sample.txt -p tests/userprog/child-close -a child-close -- -q  -f run multi-child-fd
 */
 

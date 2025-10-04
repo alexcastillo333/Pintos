@@ -194,6 +194,7 @@ thread_create (const char *name, int priority,
 
   /* Initialize thread. */
   init_thread (t, name, priority);
+  t->open_files = malloc (sizeof (uintptr_t) * 128);
 
   tid = t->tid = allocate_tid ();
 
@@ -507,7 +508,9 @@ init_thread (struct thread *t, const char *name, int priority)
   sema_init (&t->sleepsema, 0);
   sema_init (&t->processexec, 0);
   sema_init (&t->processwait, 0);
-  
+  sema_init (&t->processexit, 0);
+
+
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);

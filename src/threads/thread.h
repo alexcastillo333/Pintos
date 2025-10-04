@@ -110,7 +110,12 @@ thead. */
    struct semaphore processwait;  /* a parent will initialize its child 
    processwait semaphore to 0 then call down, the child will call up when it
    exits*/
-   struct semaphore processexec;     /* parent will initialize its processexec to 0 then down, the child will up semaphore after attempting to load executable */
+   struct semaphore processexec;     /* parent will initialize its processexec 
+   to 0 then down, the child will up semaphore after attempting to load 
+   executable */
+   struct semaphore processexit; /* when a thread exits, it will call sema down 
+   on its process exit, a parent will its child's processexit semaphore when it 
+   calls wait on that child*/
    int exitstatus;
    struct file *executable;         /*points to this process's executable file*/
    struct list children;         // list of this process's children

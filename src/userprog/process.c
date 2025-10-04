@@ -125,6 +125,7 @@ process_wait (tid_t child_tid)
           struct thread *child = list_entry (e, struct thread, childrenelem);
           if (child->tid == child_tid)
           {
+            sema_up (&child->processexit);
             sema_down (&child->processwait);
             ret = child->exitstatus;
             list_remove (e);
@@ -168,10 +169,16 @@ process_exit (void)
   for (e = list_begin (&cur->locks); e != list_end (&cur->locks);
       e = list_next (e))
    {
-      //printf("release lock\n");
       struct lock *l = list_entry (e, struct lock, elem);
       lock_release (l);
    }
+  
+   for (e = list_begin (&cur->children); e != list_end (&cur->children);
+        e = list_next (e))
+      {
+        struct thread *child = list_entry (e, struct thread, childrenelem);
+        process_wait (child->tid);
+      }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
