@@ -121,7 +121,7 @@ thead. */
    struct list children;         // list of this process's children
    struct list_elem childrenelem;  // element of children list
    struct lock childrenlock;  // children list is critical section
-   int childexitstatus;          // when this thread calls wait, the child that 
+   int childloadstatus;          // when this thread calls wait, the child that 
    // it waited on will set this member in its parent to its exit status
          // mapping from tid to exit status, when a child exits, it will put 
          // the exit status into this array in the parent

@@ -17,6 +17,12 @@ FirstName LastName <email@domain.example>
 >> If you have any preliminary comments on your submission, notes for the
 >> TAs, or extra credit, please give them here.
 
+The docker container uses the linux/amd64 platform which gives a warning about
+poor performance if run via emulation, which I am doing. I am assuming that 
+this is the reason that my multi-oom does not finish before the time limit, 
+because when I run it without a time limit, it outputs the correct output.
+
+
 >> Please cite any offline or online sources you consulted while
 >> preparing your submission, other than the Pintos documentation, course
 >> text, lecture notes, and course staff.
@@ -40,6 +46,10 @@ This would cause an assertion failure due to the fact that locks are used before
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+static int PTRSZ = 4;
+A global variable to hold the size of a pointer, because manipulating the stack 
+pointer and the data it points to is done in multiples of 4.
+
 ---- ALGORITHMS ----
 
 >> A2: Briefly describe how you implemented argument parsing.  How do
@@ -50,19 +60,43 @@ I use strtok_r to break file_name into separate strings separated
 by spaces. For each string, I get the length of that string, decrement 
 the stack pointer, esp, by length + 1, then copy the string to esp. I also save 
 the offset between the top of the stack and where we copied the string to, and 
-write that offset to where the original string was stored. After all the 
-arguments have been written to the stack, I then push (PHYS_BASE - offset) onto 
-the stack, for each argument, so that we have pointers to the argument strings.
-I have not added anything to prevent overflowing the stack page, but I will set 
+write that offset to where the original string was stored. I re-use the 
+memory that held the original arguments to hold the offset array, because we 
+have already copied the arguments to the stack, and there is no need to keep 
+the original arguments. After all the  arguments have been written to the 
+stack, I then push (PHYS_BASE - offset) onto  the stack, for each argument, so 
+that we have pointers to the argument strings. I have not added anything to prevent overflowing the stack page, but I will set 
 a 1 page limit to the length of the arguments eventually.
 
 ---- RATIONALE ----
 
 >> A3: Why does Pintos implement strtok_r() but not strtok()?
 
+strtok () uses global data, which would not be safe in the pintos environment
+because multiple processes could be using tokenizing a string at the same time. 
+Every string tokenization would need to be treated as a critical section with 
+strtok, which would make concurrent processes run slower. strtok_r allows many 
+threads to tokenize strings concurrently, which is is needed when pintos execs 
+many programs at once.
+
 >> A4: In Pintos, the kernel separates commands into a executable name
 >> and arguments.  In Unix-like systems, the shell does this
 >> separation.  Identify at least two advantages of the Unix approach.
+
+In the Unix approach, there is no need to create a new process/thread for 
+each call to an executable, even when that call is bad. In pintos, a call to 
+exec will always create a new process, even when the executable is bad, so this 
+bad process will need to be created, scheduled, then destroyed, when unix can 
+simply have the shell tell the kernel that the executable does not exist before 
+creating and destroying an entire process.
+
+1. The unix approach would save time when failing to run an executable and it 
+is also more interactive than pintos, because the fail message can just be 
+printed to the shell, instead of in pintos where the new process will say that 
+the load failed.
+
+2. The unix approach also saves space, because there is no need to create a new 
+process during a failure.
 
                  SYSTEM CALLS
                  ============
@@ -75,24 +109,66 @@ a 1 page limit to the length of the arguments eventually.
 
 members added to struct thread
 
-int file_descroptor;
-keeps count of the number of files that have been opened, is also the offset 
-into open_files for when we open a new file 
+int file_descriptor;
+keeps count of the number of files that have been opened in total, is also the 
+offset into open_files for when we open a new file.
 
-uintptr_t ** open_files;
-pointers to open files, a file descriptor is the offset at which a file is 
-located
+struct file ** open_files;
+an array of 128 file pointers, each time we open a file we put the pointer of 
+that file into this array at offset file_descriptor.
+
+struct thread *parent;
+points to a threads parent thread 
+
+struct semaphore processwait;  
+ensures that a child will exit before a parent returns from wait.
+
+struct semaphore processexec;
+ensures that a child is done loading before a parent returns from exec.
+
+struct semaphore processexit;
+ensures that a child does not exit until a parent waits on that child.
+
+int exitstatus;
+the exit status of an exiting process
+
+struct file *executable;
+points to the executable file of a process
+
+struct list children;        
+list of a process's children
+
+struct list_elem childrenelem;
+an element of the children list
+
+struct lock childrenlock;
+ensures that the children list is only accessed by one child at a time.
+
+int childloadstatus;
+Tell's the parent if a child's executable was loaded correctly.
 
 >> B2: Describe how file descriptors are associated with open files.
 >> Are file descriptors unique within the entire OS or just within a
 >> single process?
 
-file descriptors are unqiue within a single process.
+File descriptors have a one to one mapping with each call to open. A file has 
+information about what file is open and the offset into that file. A process 
+can have multiple file descriptors for a single file if it called open on a 
+file more than once. A file descriptor goes away when close is called on that 
+file descriptor, and you would be unable to use the closed file descriptor 
+again. File descriptors are unqiue within a single process.
 
 ---- ALGORITHMS ----
 
 >> B3: Describe your code for reading and writing user data from the
 >> kernel.
+
+Each time I receive a user word, I check if that word is NULL, if the 
+last byte of the word is a kernel address, and if the first and last byte of 
+the word has a mapping in the user process's page directory. If any of 
+the conditions are true, the process exits with status -1. If the user word is 
+a  pointer, then I also do the same check for the word that the pointer points 
+to.
 
 >> B4: Suppose a system call causes a full page (4,096 bytes) of data
 >> to be copied from user space into the kernel.  What is the least
@@ -101,8 +177,33 @@ file descriptors are unqiue within a single process.
 >> for a system call that only copies 2 bytes of data?  Is there room
 >> for improvement in these numbers, and how much?
 
+For a system call of 4096 bytes, The least amount of inspections is 2, where we 
+check the first and the last  byte of the page, assuming the entire page is a 
+string. The most amount of inspections is 1026. Again, we check the first and 
+last byte, but if the entire page is full of pointers, each pointer would also 
+have to be checked.
+
+For a system call of 2 bytes, we would only need 2 inspections.
+
+There is not room for improvement in these numbers.
+
 >> B5: Briefly describe your implementation of the "wait" system call
 >> and how it interacts with process termination.
+
+The wait system call iterates through a process's child list, if no child has a 
+maching pid to the one passed to wait, return -1. If a matching pid is found in 
+the list, then I up that process's processexit semaphore which was. I then down 
+that process's processwait semaphore. Both semaphore were initialized to zero 
+when the child process was created. When the child exits, it calls down on its 
+processexit semaphore, this ensures that it will not exit until the parent 
+waits on it. At the end of the exit, the child will up the processwait 
+semaphore, which allows the parent process to get the child's exit status then 
+remove it from its child list. This ordering of semaphores ensure that a parent 
+will always get it's child exit status, even if the child would have exited 
+before its parent calls wait on it. Also, when a process exits, it will call 
+wait on all of its children that the user process did not call wait on. This 
+ensure that no zombie process will take up resources if a parent does not wait 
+on it.
 
 >> B6: Any access to user program memory at a user-specified address
 >> can fail due to a bad pointer value.  Such accesses must cause the
@@ -118,12 +219,24 @@ file descriptors are unqiue within a single process.
 >> paragraphs, describe the strategy or strategies you adopted for
 >> managing these issues.  Give an example.
 
+
+
+
 ---- SYNCHRONIZATION ----
 
 >> B7: The "exec" system call returns -1 if loading the new executable
 >> fails, so it cannot return before the new executable has completed
 >> loading.  How does your code ensure this?  How is the load
 >> success/failure status passed back to the thread that calls "exec"?
+
+In process_execute, the calling process will first create its child thread, 
+which starts executing at start_process then it calls down on its processexec 
+semaphore, which was initialized to 0. The child process calls load, and when 
+the load is finished, it then sets its parents childexit status to -1 if the 
+load failed, then the child then calls up on its parents processexec semaphore.
+The parent then checks its childloadstatus member, returning -1 if the load 
+failed and the child's pid otherwise.
+
 
 >> B8: Consider parent process P with child process C.  How do you
 >> ensure proper synchronization and avoid race conditions when P
@@ -132,16 +245,38 @@ file descriptors are unqiue within a single process.
 >> terminates without waiting, before C exits?  After C exits?  Are
 >> there any special cases?
 
+I ensure proper synchronization by using two semaphores, one for when the 
+parent calls wait, and one when the child exits. The children list also has a 
+lock around it, which prevents a child can from adding itself to the parent's 
+children list while the parent is iterating through it. 
+
+P calls wait on C, which ups a C's processexit semaphore, which tells C that it can now exit. P then immediately calls down on its own processwait semaphore.
+When C exits, it first calls sema down on its processexit semaphore, which ensures that P waits on C before it continues its exit routine. At the end of C's exit routine, it ups P's processwait semaphore, ensuring P does not execute anything until C has finished executing. All of C's resources are freed after it ups P's processwait semaphore, because by then, P knows the exit status of C, and C can de destroyed. If P terminates without waiting for C, it will implicitly call wait on C during P's exit routine. Because of the semaphore ordering, C will exit in the case where C calls exit before or after P waits on C.
+
+
 ---- RATIONALE ----
 
 >> B9: Why did you choose to implement access to user memory from the
 >> kernel in the way that you did?
 
+I chose to check user memory before dereferencing it because if a user address is invalid, I can just call exit(-1) from directly syscall handler, while setting the process's exit status to -1. If I had simply dereferenced it, I  would call exit from the page fault handler while passing the -1 exit status to the syscall handler. I figured the first option would be easier, so I went with that.
+
 >> B10: What advantages or disadvantages can you see to your design
 >> for file descriptors?
 
+I chose to have an array of files, where the file descriptor of an open file is 
+the offset into this array. The array allows for immediate access to open files 
+instead of iterating through a linked list, and it also can immediately see if 
+a file descriptor is bad, because a bad one will be NULL in the array. However 
+this implementation causes a fixed limit to the number of files that can be 
+opened. It also causes unnessary memory to be allocated, when a process opens 
+fewer than 128 files. When we close a file, the space in the array will not be 
+re-used either, which is another memory inefficiency.
+
 >> B11: The default tid_t to pid_t mapping is the identity mapping.
 >> If you changed it, what advantages are there to your approach?
+
+I did not change it.
 
                SURVEY QUESTIONS
                ================

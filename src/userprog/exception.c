@@ -151,27 +151,10 @@ page_fault (struct intr_frame *f)
   not_present = (f->error_code & PF_P) == 0;
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
-    struct thread *t = thread_current ();
+  struct thread *t = thread_current ();
 
-  //  printf("tid: %d page faulted\n", t->tid);
-
-//   printf ("Page fault at %p: %s error %s page in %s context.\n",
-//           fault_addr,
-//           not_present ? "not present" : "rights violation",
-//           write ? "writing" : "reading",
-//           user ? "user" : "kernel");
-  // need to release any locks that this thread has
-//   struct list_elem *e;
-//   for (e = list_begin (&t->locks); e != list_end (&t->locks);
-//       e = list_next (e))
-//    {
-//       //printf("release lock\n");
-//       struct lock *l = list_entry (e, struct lock, elem);
-//       lock_release (l);
-//    }
   thread_current ()->exitstatus = -1;
   sys_exit (f, NULL);
-  //thread_exit ();
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */

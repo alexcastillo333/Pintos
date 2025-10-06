@@ -23,6 +23,7 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 struct lock filesys_lock;
+int ptrsize = 4;
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
@@ -45,8 +46,8 @@ process_execute (const char *file_name)
   char *name = (char *) malloc(len + 1);
   strlcpy (name, file_name, len + 1);
 
-  memcpy (fn_copy, &parent, 4);
-  strlcpy (fn_copy + 4, file_name, PGSIZE - 4);
+  memcpy (fn_copy, &parent, ptrsize);
+  strlcpy (fn_copy + ptrsize, file_name, PGSIZE - ptrsize);
   
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (name, PRI_DEFAULT, start_process, fn_copy);
@@ -68,7 +69,7 @@ start_process (void *file_name_)
   struct thread * parent = (struct thread *) *((uintptr_t *) file_name);
   struct thread *cur = thread_current ();
   cur->parent = parent;
-  file_name += 4;
+  file_name += ptrsize;
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
@@ -87,7 +88,7 @@ start_process (void *file_name_)
     sema_up (&parent->processexec);
   } else {
     cur->exitstatus = -1;
-    parent->childexitstatus = -1;
+    parent->childloadstatus = -1;
     sema_up (&parent->processexec);
     thread_exit ();
   }
@@ -306,14 +307,11 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   char *token, *save_ptr;
-  // separate the file name from the arguments, file name &save_ptr should have point to the end of file_name if it is only a file name, or the first argument
 
   token = strtok_r ((char *) file_name, " ", &save_ptr);
 
   /* Open executable file. */
-  //lock_acquire (&filesys_lock);
   file = filesys_open (token);
-  //lock_release (&filesys_lock);
 
   t->executable = file;
   if (file == NULL) 
@@ -321,14 +319,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
       printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
-  //lock_acquire (&filesys_lock);
   file_deny_write (file);
-  //lock_release (&filesys_lock);
 
   /* Read and verify executable header. */
-  //lock_acquire (&filesys_lock);
   filesys_check = file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr;
-  //lock_release (&filesys_lock);
 
   if (filesys_check
       || memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7)
@@ -347,15 +341,11 @@ load (const char *file_name, void (**eip) (void), void **esp)
   for (i = 0; i < ehdr.e_phnum; i++) 
     {
       struct Elf32_Phdr phdr;
-      //lock_acquire (&filesys_lock);
       filesys_check = file_ofs > file_length (file);
-      //lock_release (&filesys_lock);
       if (file_ofs < 0 || filesys_check)
         goto done;
-      //lock_acquire (&filesys_lock);
       file_seek (file, file_ofs);
       filesys_check = file_read (file, &phdr, sizeof phdr) != sizeof phdr;
-      //lock_release (&filesys_lock);
       if (filesys_check)
         goto done;
       file_ofs += sizeof phdr;
@@ -434,13 +424,9 @@ validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
 
   /* p_offset must point within FILE. */
 
-  //lock_acquire (&filesys_lock);
   off_t offset = file_length (file);
-  //lock_release (&filesys_lock);
   if (phdr->p_offset > (Elf32_Off) offset) 
     return false;
-  // if (phdr->p_offset > (Elf32_Off) file_length (file)) 
-    // return false;
 
   /* p_memsz must be at least as big as p_filesz. */
   if (phdr->p_memsz < phdr->p_filesz) 
@@ -496,9 +482,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
 
-  //lock_acquire (&filesys_lock);
   file_seek (file, ofs);
-  //lock_release (&filesys_lock);
   while (read_bytes > 0 || zero_bytes > 0) 
     {
       /* Calculate how to fill this page.
@@ -513,19 +497,13 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
         return false;
 
       /* Load this page. */
-      //lock_acquire (&filesys_lock);
       int read = file_read (file, kpage, page_read_bytes);
-      //lock_release (&filesys_lock);
       if (read != (int) page_read_bytes)
       {
         palloc_free_page (kpage);
         return false;
       }
-      //if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
-      //  {
-      //    palloc_free_page (kpage);
-      //    return false; 
-      //  }
+  
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
 
       /* Add the page to the process's address space. */
@@ -556,47 +534,37 @@ setup_stack_helper (void **esp, char *token, char *save_ptr)
 {
   int argc = 0;
   int tokenlen;
-  // offsets will be used to push the pointers to the arguments on the stack
-  // we will use 2 byte long offsets because an argument is at least 2 bytes
-  // min size of an arg is one char and a null terminator = 2 bytes
-  // So store the offsets where the program + arguments string was stored
+
   uint16_t offset = 0;
   uint16_t *offsets = (void *) token; 
   for (token = token; token != NULL;
        token = strtok_r (NULL, " ", &save_ptr))
       {
-        // decrement stack pointer by the length of token + 1 for null terminator, then copy data to stack, also need to save the stack pointers current address
         tokenlen = strlen (token);
         offset += tokenlen + 1;
         *esp = PHYS_BASE - offset;
-        // copy the arg (or program name) to the stack
         strlcpy (*esp, token, tokenlen + 1);
-        // save the offsets
         *offsets = 0;
         *offsets = offset;
         offsets++;
         argc++;
       }
     
-    // want stack pointer to be word aligned
-    *esp -= (4 - offset % 4 == 4) ? 0 : 4 - offset % 4;
-    //  null pointer, then pointer to each arg from right to left
-    *esp -= sizeof (char *);
-    memset(*esp, 0, sizeof(char *));
+    *esp -= (ptrsize - offset % ptrsize == ptrsize) ?
+             0 : ptrsize - offset % ptrsize;
+    *esp -= ptrsize;
+    memset(*esp, 0, ptrsize);
     for (int i = 0; i < argc; i++) {
-      *esp -= sizeof (uintptr_t);
+      *esp -= ptrsize;
       *(uintptr_t *) *esp = (uintptr_t) PHYS_BASE - *(offsets - 1);
       offsets -= 1;
     }
-    // // push address of first argument on stack onto stack
-     *esp -= sizeof (uintptr_t);
-     *(uintptr_t *) *esp = (uintptr_t) *esp + sizeof(uintptr_t);
-    // push argc
-    *esp -= sizeof (int);
+     *esp -= ptrsize;
+     *(uintptr_t *) *esp = (uintptr_t) *esp + ptrsize;
+    *esp -= ptrsize;
     * (int *)*esp = argc;
-    // push NULL
-    *esp -= sizeof (void *);
-    memset(*esp, 0, sizeof(void *));
+    *esp -= ptrsize;
+    memset(*esp, 0, ptrsize);
 }
 
 /* Create a minimal stack by mapping a zeroed page at the top of
